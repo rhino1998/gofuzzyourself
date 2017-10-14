@@ -2,6 +2,7 @@ package fuzzer
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -11,47 +12,6 @@ import (
 	"sync"
 )
 
-var generators = make(map[string]func([]byte) (Generator, error))
-var readerGenerators = make(map[string]func([]byte) (ReaderGenerator, error))
-
-func init() {
-	var prefix Prefix
-	RegisterGenerator("prefix", prefix.unmarshal)
-
-	var constant Constant
-	RegisterGenerator("constant", constant.unmarshal)
-
-	var integerRandom IntegerRandom
-	RegisterGenerator("integer_random", integerRandom.unmarshal)
-
-	var integerNormalRandom IntegerNormalRandom
-	RegisterGenerator("integer_normal_random", integerNormalRandom.unmarshal)
-
-	var floatRandom FloatRandom
-	RegisterGenerator("float_random", floatRandom.unmarshal)
-
-	var floatNormalRandom FloatNormalRandom
-	RegisterGenerator("float_normal_random", floatNormalRandom.unmarshal)
-
-	var fileReader FileReader
-	RegisterReaderGenerator("file_reader", fileReader.unmarshal)
-
-	var commandReader CommandReader
-	RegisterReaderGenerator("command_reader", commandReader.unmarshal)
-}
-
-//RegisterGenerator registers a new Generator for the config parser
-//Use during initialization. Determinism is lost if used later
-func RegisterGenerator(t string, f func([]byte) (Generator, error)) {
-	generators[t] = f
-}
-
-//RegisterReaderGenerator registers a new ReaderGenerator for the config parser
-//Use during initialization. Determinism is lost if used later
-func RegisterReaderGenerator(t string, f func([]byte) (ReaderGenerator, error)) {
-	readerGenerators[t] = f
-}
-
 //Definition describes a fuzzer test batch
 type Definition struct {
 	tests  []string
@@ -60,7 +20,7 @@ type Definition struct {
 
 	args  []Generator
 	vars  []Generator
-	stdin ReaderGenerator
+	stdin Generator
 }
 
 type command struct {
@@ -98,7 +58,6 @@ func (d *Definition) Run() error {
 }
 
 func (d *Definition) oneRun() error {
-
 	args := genInput(d.args)
 	vars := genInput(d.vars)
 	tests := make(testCommands, len(d.tests))
@@ -225,7 +184,9 @@ func makeCommand(executable string, args, vars []string) (*command, error) {
 func genInput(gs []Generator) []string {
 	out := make([]string, len(gs))
 	for i, g := range gs {
-		out[i] = g.Generate()
+		buf := new(bytes.Buffer)
+		io.Copy(g.Generate())
+		out[i] = buf.String()
 	}
 	return out
 }
