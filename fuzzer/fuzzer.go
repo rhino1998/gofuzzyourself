@@ -58,11 +58,16 @@ func (d *Definition) Run() error {
 }
 
 func (d *Definition) oneRun() error {
-	args := genInput(d.args)
-	vars := genInput(d.vars)
+	args, err := genInput(d.args)
+	if err != nil {
+		return err
+	}
+	vars, err := genInput(d.vars)
+	if err != nil {
+		return err
+	}
 	tests := make(testCommands, len(d.tests))
 	for i, test := range d.tests {
-		var err error
 		tests[i], err = makeCommand(test, args, vars)
 		if err != nil {
 			return err
@@ -83,13 +88,14 @@ func (d *Definition) oneRun() error {
 
 	//Manage test execution
 	for _, test := range tests {
-		err := test.cmd.Start()
+		err = test.cmd.Start()
 		if err != nil {
 			return err
 		}
 	}
 
-	stdin, err := d.stdin.GenerateReader()
+	stdin, err := d.stdin.Generate()
+	defer stdin.Close()
 	if err != nil {
 		return err
 	}
@@ -181,12 +187,17 @@ func makeCommand(executable string, args, vars []string) (*command, error) {
 	return &command{cmd, stdin, stdout, stderr}, err
 }
 
-func genInput(gs []Generator) []string {
+func genInput(gs []Generator) ([]string, error) {
 	out := make([]string, len(gs))
 	for i, g := range gs {
 		buf := new(bytes.Buffer)
-		io.Copy(g.Generate())
+		rc, err := g.Generate()
+		if err != nil {
+			return nil, err
+		}
+		defer rc.Close()
+		io.Copy(buf, rc)
 		out[i] = buf.String()
 	}
-	return out
+	return out, nil
 }
