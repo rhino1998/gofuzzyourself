@@ -1,0 +1,22 @@
+{
+    "tests": ["echo"],
+    "runs":1,
+    "output":true,
+    "args": [
+    ],
+    "args":[
+        {
+            "type":"prefix",
+            "value":"SOMETHING=",
+            "generator":{
+                "type":"integer_normal_random",
+                "mean":180,
+                "std_dev":200
+            }
+        }
+    ],
+	"stdin":{
+		"type": "command_reader",
+		"command": "echo"
+	}
+}
