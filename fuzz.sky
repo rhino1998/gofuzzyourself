@@ -3,8 +3,13 @@ def random_int(x):
         return x*4
     return y
 
+def open_file(name):
+    def y():
+        return [open(name), "hello"]
+    return y
 
-tests = ["cat", "cat"]
+tests = ["echo", "echo"]
 runs = 5
-args = [random_int(i) for i in range(5)]
+stdin = open_file("fuzz.sky")
+args = [random_int(i) for i in range(5)]+[open_file("fuzz.sky")]
 vars = {str(i):random_int(i) for i in range(5)}

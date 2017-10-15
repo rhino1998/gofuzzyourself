@@ -17,6 +17,7 @@ func parsingError(err error, filename string) error {
 func ParseConfig(filename string, src interface{}) (*Definition, error) {
 	thread := &skylark.Thread{}
 	globals := skylark.Universe
+	globals["open"] = skylark.NewBuiltin("open", open)
 	err := skylark.Exec(skylark.ExecOptions{
 		Thread:   thread,
 		Filename: filename,

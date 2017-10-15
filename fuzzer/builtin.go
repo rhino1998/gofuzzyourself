@@ -16,7 +16,8 @@ func open(thread *skylark.Thread, fn *skylark.Builtin,
 			args.Len(),
 		)
 	}
-	f, err := os.Open(args.Index(0).String())
+	filename, _ := skylark.AsString(args.Index(0))
+	f, err := os.Open(filename)
 
 	return &ReadCloserValue{f}, errors.Wrap(
 		err,
