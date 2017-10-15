@@ -20,8 +20,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error opening config file: %v", err)
 	}
-	_, err = fuzzer.ParseConfig(fileName, file)
+	def, err := fuzzer.ParseConfig(fileName, file)
 	if err != nil {
 		log.Fatalf("Error parsing config file: %v", err)
+	}
+	err = def.Run()
+	if err != nil {
+		log.Fatalf("%v", err)
 	}
 }

@@ -9,8 +9,18 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
+
+	"github.com/google/skylark/resolve"
 )
+
+func init() {
+	resolve.AllowLambda = true
+	resolve.AllowSet = true
+	resolve.AllowFloat = true
+	resolve.AllowNestedDef = true
+}
 
 //Definition describes a fuzzer test batch
 type Definition struct {
@@ -18,9 +28,9 @@ type Definition struct {
 	runs   int
 	output bool
 
-	args  []Generator
-	vars  []Generator
-	stdin Generator
+	args  []*Generator
+	vars  map[string]*Generator
+	stdin *Generator
 }
 
 type command struct {
@@ -58,11 +68,11 @@ func (d *Definition) Run() error {
 }
 
 func (d *Definition) oneRun() error {
-	args, err := genInput(d.args)
+	args, err := genArgsInput(d.args)
 	if err != nil {
 		return err
 	}
-	vars, err := genInput(d.vars)
+	vars, err := genVarsInput(d.vars)
 	if err != nil {
 		return err
 	}
@@ -94,8 +104,7 @@ func (d *Definition) oneRun() error {
 		}
 	}
 
-	stdin, err := d.stdin.Generate()
-	defer stdin.Close()
+	stdin, err := strings.NewReader("hello"), nil //d.stdin.Generate()
 	if err != nil {
 		return err
 	}
@@ -187,9 +196,9 @@ func makeCommand(executable string, args, vars []string) (*command, error) {
 	return &command{cmd, stdin, stdout, stderr}, err
 }
 
-func genInput(gs []Generator) ([]string, error) {
-	out := make([]string, len(gs))
-	for i, g := range gs {
+func genArgsInput(args []*Generator) ([]string, error) {
+	out := make([]string, len(args))
+	for i, g := range args {
 		buf := new(bytes.Buffer)
 		rc, err := g.Generate()
 		if err != nil {
@@ -198,6 +207,23 @@ func genInput(gs []Generator) ([]string, error) {
 		defer rc.Close()
 		io.Copy(buf, rc)
 		out[i] = buf.String()
+	}
+	return out, nil
+}
+
+func genVarsInput(vars map[string]*Generator) ([]string, error) {
+	out := make([]string, len(vars))
+	i := 0
+	for k, g := range vars {
+		buf := new(bytes.Buffer)
+		rc, err := g.Generate()
+		if err != nil {
+			return nil, err
+		}
+		defer rc.Close()
+		io.Copy(buf, rc)
+		out[i] = fmt.Sprintf("%s=%s", k, buf.String())
+		i++
 	}
 	return out, nil
 }

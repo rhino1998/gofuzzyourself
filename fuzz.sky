@@ -1,10 +1,10 @@
+def random_int(x):
+    def y():
+        return x*4
+    return y
 
 
-{
-        "output":True,
-        "runs":5,
-        "args":[i for i in range(5)],
-        "environment-variables":{
-            "something": "sup",
-        },
-}
+tests = ["cat", "cat"]
+runs = 5
+args = [random_int(i) for i in range(5)]
+vars = {str(i):random_int(i) for i in range(5)}
