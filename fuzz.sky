@@ -1,9 +1,10 @@
-def random_int():
-    return math.random()
 
-a = {
+
+{
         "output":True,
         "runs":5,
-        "args":[random_int for i in range(5)]
+        "args":[i for i in range(5)],
+        "environment-variables":{
+            "something": "sup",
+        },
 }
-print(a)
