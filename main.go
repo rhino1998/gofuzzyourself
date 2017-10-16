@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/rhino1998/gofuzzyourself/fuzzer"
+	"github.com/rhino1998/lanugo/fuzzer"
 )
 
 func main() {
@@ -20,12 +20,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error opening config file: %v", err)
 	}
-	def, err := fuzzer.ParseConfig(file)
+	def, err := fuzzer.ParseConfig(fileName, file)
 	if err != nil {
 		log.Fatalf("Error parsing config file: %v", err)
 	}
 	err = def.Run()
 	if err != nil {
-		log.Fatalf("Error during fuzzing run: %v", err)
+		log.Fatalf("%v", err)
 	}
 }
