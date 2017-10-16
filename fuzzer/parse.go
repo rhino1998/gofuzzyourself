@@ -17,7 +17,7 @@ func parsingError(err error, filename string) error {
 func ParseConfig(filename string, src interface{}) (*Definition, error) {
 	thread := &skylark.Thread{}
 	globals := skylark.Universe
-	globals["open"] = skylark.NewBuiltin("open", open)
+
 	err := skylark.Exec(skylark.ExecOptions{
 		Thread:   thread,
 		Filename: filename,
@@ -185,12 +185,20 @@ func getStdin(globals skylark.StringDict) (*Generator, error) {
 	if !found {
 		return nil, fmt.Errorf("Missing declaration of runs")
 	}
-	fn, ok := val.(skylark.Callable)
-	if !ok {
+	switch vt := val.(type) {
+	case skylark.Callable:
+
+		return NewGenerator(vt), nil
+	case *skylark.List:
+		return NewGeneratorFromConstant(vt), nil
+	case skylark.Tuple:
+		return NewGeneratorFromConstant(vt), nil
+	case skylark.String:
+		return NewGeneratorFromConstant(vt), nil
+	default:
 		return nil, fmt.Errorf(
 			"Invalid type for generator at stdin (Expected Function or Builtin; got %q)",
 			val.Type(),
 		)
 	}
-	return NewGenerator(fn), nil
 }

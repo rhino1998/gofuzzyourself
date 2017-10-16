@@ -1,6 +1,7 @@
 package fuzzer
 
 import (
+	"fmt"
 	"io"
 	"strings"
 
@@ -49,6 +50,17 @@ func NewGenerator(fn skylark.Callable) *Generator {
 	return &Generator{fn: fn}
 }
 
+func NewGeneratorFromConstant(v skylark.Value) *Generator {
+	return NewGenerator(skylark.NewBuiltin("temporary", func(
+		*skylark.Thread,
+		*skylark.Builtin,
+		skylark.Tuple,
+		[]skylark.Tuple,
+	) (skylark.Value, error) {
+		return v, nil
+	}))
+}
+
 //Generate returns an io.ReadCloser based on the skylark.Callable value it wraps
 func (g *Generator) Generate() (io.ReadCloser, error) {
 	thread := &skylark.Thread{}
@@ -62,11 +74,11 @@ func (g *Generator) Generate() (io.ReadCloser, error) {
 
 func makeReadCloser(val skylark.Value) (io.ReadCloser, error) {
 	switch vt := val.(type) {
-	case *ReadCloserValue:
+	case io.ReadCloser:
 		return vt, nil
 	case skylark.String:
 		return nopCloser{strings.NewReader(string(vt))}, nil
-	case *skylark.List:
+	case skylark.Indexable:
 		rcs := make([]io.ReadCloser, vt.Len())
 		for i := 0; i < vt.Len(); i++ {
 			rc, err := makeReadCloser(vt.Index(i))
@@ -78,5 +90,24 @@ func makeReadCloser(val skylark.Value) (io.ReadCloser, error) {
 		return newMultiReadCloser(rcs...), nil
 	default:
 		return nopCloser{strings.NewReader(vt.String())}, nil
+	}
+}
+
+func makeWriter(val skylark.Value) (io.Writer, error) {
+	switch vt := val.(type) {
+	case io.Writer:
+		return vt, nil
+	case skylark.Indexable:
+		ws := make([]io.Writer, vt.Len())
+		for i := 0; i < vt.Len(); i++ {
+			w, err := makeWriter(vt.Index(i))
+			if err != nil {
+				return nil, err
+			}
+			ws[i] = w
+		}
+		return io.MultiWriter(ws...), nil
+	default:
+		return nil, fmt.Errorf("Invalid Type (%v) for Writer", val.Type())
 	}
 }

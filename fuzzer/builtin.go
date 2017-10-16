@@ -19,7 +19,7 @@ func open(thread *skylark.Thread, fn *skylark.Builtin,
 	filename, _ := skylark.AsString(args.Index(0))
 	f, err := os.Open(filename)
 
-	return &ReadCloserValue{f}, errors.Wrap(
+	return &fileValue{f}, errors.Wrap(
 		err,
 		fmt.Sprintf("Error opening %q", args.Index(0).String()),
 	)

@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/google/skylark"
 	"github.com/google/skylark/resolve"
 )
 
@@ -19,6 +20,12 @@ func init() {
 	resolve.AllowSet = true
 	resolve.AllowFloat = true
 	resolve.AllowNestedDef = true
+	osVal := NewNamespace("os")
+	osVal.SetAttr("stdout", &writerValue{os.Stdout})
+	osVal.SetAttr("stderr", &writerValue{os.Stderr})
+
+	skylark.Universe["open"] = skylark.NewBuiltin("open", open)
+	skylark.Universe["os"] = osVal
 }
 
 //Definition describes a fuzzer test batch
@@ -83,8 +90,6 @@ func (d *Definition) oneRun() error {
 		}
 	}
 
-	mergeStdin := io.MultiWriter(tests.stdins()...)
-
 	var mergeStdout io.Writer = os.Stdout
 	var mergeStderr io.Writer = os.Stdout
 	if !d.output {
@@ -103,16 +108,21 @@ func (d *Definition) oneRun() error {
 		}
 	}
 
-	stdin, err := d.stdin.Generate()
-	if err != nil {
-		return err
-	}
-	defer stdin.Close()
+	if d.stdin != nil {
+		mergeStdin := io.MultiWriter(tests.stdins()...)
+		stdin, err := d.stdin.Generate()
+		if err != nil {
+			return err
+		}
+		defer stdin.Close()
 
-	go func() {
-		io.Copy(mergeStdin, stdin)
+		go func() {
+			io.Copy(mergeStdin, stdin)
+			tests.closeStdins()
+		}()
+	} else {
 		tests.closeStdins()
-	}()
+	}
 
 	for _, test := range tests {
 		defer test.cmd.Wait()
