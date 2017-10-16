@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/rhino1998/gofuzzyourself/fuzzer"
+	"github.com/rhino1998/lanugo/fuzzer"
 )
 
 func main() {
