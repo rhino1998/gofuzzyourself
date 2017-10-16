@@ -27,7 +27,7 @@ type WriterValue interface {
 	io.Writer
 }
 
-//WriteCloserValye implements both skylark.Value and io.WriteCloser
+//WriteCloserValue implements both skylark.Value and io.WriteCloser
 type WriteCloserValue interface {
 	skylark.Value
 	io.WriteCloser
@@ -127,6 +127,7 @@ type NamespaceValue struct {
 	attrs map[string]skylark.Value
 }
 
+//NewNamespace creates a new namespace with name "name"
 func NewNamespace(name string) *NamespaceValue {
 	return &NamespaceValue{
 		name:  name,
@@ -134,20 +135,23 @@ func NewNamespace(name string) *NamespaceValue {
 	}
 }
 
+//Attr returns the attr name under the namespaace
 func (v *NamespaceValue) Attr(name string) (skylark.Value, error) {
 	return v.attrs[name], nil
 }
 
+//AttrNames returns all valid attribute names
 func (v *NamespaceValue) AttrNames() []string {
 	names := make([]string, len(v.attrs))
 	i := 0
-	for k, _ := range v.attrs {
+	for k := range v.attrs {
 		names[i] = k
 		i++
 	}
 	return names
 }
 
+//SetAttr sets attribute attr to value val
 func (v *NamespaceValue) SetAttr(attr string, val skylark.Value) {
 	v.attrs[attr] = val
 }

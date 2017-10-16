@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"runtime"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/google/skylark"
 	"github.com/google/skylark/resolve"
+	"github.com/pkg/errors"
 )
 
 func init() {
@@ -20,23 +20,30 @@ func init() {
 	resolve.AllowSet = true
 	resolve.AllowFloat = true
 	resolve.AllowNestedDef = true
-	osVal := NewNamespace("os")
-	osVal.SetAttr("stdout", &writerValue{os.Stdout})
-	osVal.SetAttr("stderr", &writerValue{os.Stderr})
+}
 
-	skylark.Universe["open"] = skylark.NewBuiltin("open", open)
-	skylark.Universe["os"] = osVal
+func shallowCopyGlobals(globals skylark.StringDict) skylark.StringDict {
+	cpy := make(skylark.StringDict)
+	for k, v := range globals {
+		cpy[k] = v
+	}
+	return cpy
 }
 
 //Definition describes a fuzzer test batch
 type Definition struct {
-	tests  []string
-	runs   int
-	output bool
+	globals skylark.StringDict
 
-	args  []*Generator
-	vars  map[string]*Generator
-	stdin *Generator
+	tests       []string
+	runs        int
+	format      string
+	errorFormat string
+
+	args   []ReaderGenerator
+	vars   map[string]ReaderGenerator
+	stdin  ReaderGenerator
+	stdout WriterGenerator
+	stderr WriterGenerator
 }
 
 type command struct {
@@ -50,35 +57,41 @@ type command struct {
 func (d *Definition) Run() error {
 	wg := sync.WaitGroup{}
 	sema := make(chan struct{}, runtime.NumCPU()*4)
-	errChan := make(chan error)
-
-	for i := 0; i < d.runs; i++ {
-		wg.Add(1)
-		sema <- struct{}{}
-		go func() {
-			err := d.oneRun()
-			if err != nil {
-				errChan <- err
-			}
-
-			wg.Done()
-			<-sema
-		}()
-	}
+	errChan := make(chan error, d.runs)
+	closeChan := make(chan io.Closer, d.runs*2)
 
 	go func() {
-		wg.Wait()
-		close(errChan)
+		for i := 0; i < d.runs; i++ {
+			wg.Add(1)
+			sema <- struct{}{}
+			go func(run int) {
+				err := d.oneRun(State{Run: run}, closeChan)
+				if err != nil {
+					errChan <- err
+				}
+				wg.Done()
+				<-sema
+			}(i)
+		}
+		go func() {
+			wg.Wait()
+			close(closeChan)
+			for closer := range closeChan {
+				closer.Close()
+			}
+			close(errChan)
+		}()
 	}()
+
 	return <-errChan
 }
 
-func (d *Definition) oneRun() error {
-	args, err := genArgsInput(d.args)
+func (d *Definition) oneRun(s State, closeChan chan io.Closer) error {
+	args, err := genArgsInput(d.args, s)
 	if err != nil {
 		return err
 	}
-	vars, err := genVarsInput(d.vars)
+	vars, err := genVarsInput(d.vars, s)
 	if err != nil {
 		return err
 	}
@@ -90,15 +103,26 @@ func (d *Definition) oneRun() error {
 		}
 	}
 
-	var mergeStdout io.Writer = os.Stdout
-	var mergeStderr io.Writer = os.Stdout
-	if !d.output {
-		mergeStderr = ioutil.Discard
-		mergeStdout = ioutil.Discard
+	mergeStdout, err := d.stdout.GenerateWriter(s)
+	if err != nil {
+		return err
 	}
+	closeChan <- mergeStdout
 
-	diffStdoutErrChan := compareReaders(mergeStdout, tests.stdouts()...)
-	diffStderrErrChan := compareReaders(mergeStderr, tests.stderrs()...)
+	mergeStderr, err := d.stderr.GenerateWriter(s)
+	if err != nil {
+		return err
+	}
+	closeChan <- mergeStderr
+
+	diffStdoutErrChan := compareReaders(
+		s.Run, d.format, d.errorFormat,
+		mergeStdout, tests.stdouts()...,
+	)
+	diffStderrErrChan := compareReaders(
+		s.Run, d.format, d.errorFormat,
+		mergeStderr, tests.stderrs()...,
+	)
 
 	//Manage test execution
 	for _, test := range tests {
@@ -108,16 +132,21 @@ func (d *Definition) oneRun() error {
 		}
 	}
 
+	stdinErrChan := make(chan error)
+	defer close(stdinErrChan)
+
 	if d.stdin != nil {
 		mergeStdin := io.MultiWriter(tests.stdins()...)
-		stdin, err := d.stdin.Generate()
+		stdin, err := d.stdin.GenerateReader(s)
 		if err != nil {
 			return err
 		}
 		defer stdin.Close()
-
 		go func() {
-			io.Copy(mergeStdin, stdin)
+			_, err := io.Copy(mergeStdin, stdin)
+			if err != nil {
+				stdinErrChan <- err
+			}
 			tests.closeStdins()
 		}()
 	} else {
@@ -130,15 +159,50 @@ func (d *Definition) oneRun() error {
 
 	select {
 	case err := <-diffStderrErrChan:
-		<-diffStdoutErrChan
-		return err
+		err2 := <-diffStdoutErrChan
+		if err2 != nil {
+			return errors.Wrapf(
+				err2,
+				"Error on tests %v given args %v and environment %v",
+				d.tests,
+				args,
+				vars,
+			)
+		}
+		return errors.Wrapf(
+			err,
+			"Error on tests %v given args %v and environment %v",
+			d.tests,
+			args,
+			vars,
+		)
 	case err := <-diffStdoutErrChan:
-		<-diffStderrErrChan
-		return err
+		err2 := <-diffStderrErrChan
+		if err2 != nil {
+			return errors.Wrapf(
+				err2,
+				"Error on tests %v given input %v and environment %v",
+				d.tests,
+				args,
+				vars,
+			)
+		}
+		return errors.Wrapf(
+			err,
+			"Error on tests %v given input %v and environment %v",
+			d.tests,
+			args,
+			vars,
+		)
+	case err := <-stdinErrChan:
+		return errors.Wrapf(err, "Error reading from stdin generator")
+
 	}
 }
 
-func compareReaders(output io.Writer, readers ...io.Reader) <-chan error {
+func compareReaders(run int, format, errorFormat string,
+	output io.Writer, readers ...io.Reader) <-chan error {
+
 	errChan := make(chan error)
 
 	scanners := make([]*bufio.Scanner, len(readers))
@@ -167,10 +231,10 @@ func compareReaders(output io.Writer, readers ...io.Reader) <-chan error {
 			}
 
 			if same {
-				fmt.Fprintf(output, "   %s\n", line1)
+				fmt.Fprintf(output, format, run, line1)
 			} else {
 				for i, scanner := range scanners {
-					fmt.Fprintf(output, "%dX %s\n", i, scanner.Text())
+					fmt.Fprintf(output, errorFormat, run, i, scanner.Text())
 				}
 				errChan <- fmt.Errorf("Text not equal")
 			}
@@ -206,11 +270,11 @@ func makeCommand(executable string, args, vars []string) (*command, error) {
 	return &command{cmd, stdin, stdout, stderr}, err
 }
 
-func genArgsInput(args []*Generator) ([]string, error) {
+func genArgsInput(args []ReaderGenerator, s State) ([]string, error) {
 	out := make([]string, len(args))
 	for i, g := range args {
 		buf := new(bytes.Buffer)
-		rc, err := g.Generate()
+		rc, err := g.GenerateReader(s)
 		if err != nil {
 			return nil, err
 		}
@@ -221,12 +285,12 @@ func genArgsInput(args []*Generator) ([]string, error) {
 	return out, nil
 }
 
-func genVarsInput(vars map[string]*Generator) ([]string, error) {
+func genVarsInput(vars map[string]ReaderGenerator, s State) ([]string, error) {
 	out := make([]string, len(vars))
 	i := 0
 	for k, g := range vars {
 		buf := new(bytes.Buffer)
-		rc, err := g.Generate()
+		rc, err := g.GenerateReader(s)
 		if err != nil {
 			return nil, err
 		}

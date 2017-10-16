@@ -14,53 +14,79 @@ func parsingError(err error, filename string) error {
 /*ParseConfig parses a skylark file looking for specific global variables
 * describing what binaries to fuzz and what inputs to provide
  */
-func ParseConfig(filename string, src interface{}) (*Definition, error) {
+func ParseConfig(filename string, src interface{}, opt ...Option) (*Definition, error) {
 	thread := &skylark.Thread{}
-	globals := skylark.Universe
+	def := &Definition{
+		globals: shallowCopyGlobals(skylark.Universe),
+	}
+	setupGlobals(def.globals)
 
 	err := skylark.Exec(skylark.ExecOptions{
 		Thread:   thread,
 		Filename: filename,
 		Source:   src,
-		Globals:  globals,
+		Globals:  def.globals,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	tests, err := getTests(globals)
+	tests, err := getTests(def.globals)
 	if err != nil {
 		return nil, parsingError(err, filename)
 	}
-	runs, err := getRuns(globals)
-	if err != nil {
-		return nil, parsingError(err, filename)
-	}
-	args, err := getArgs(globals)
-	if err != nil {
-		return nil, parsingError(err, filename)
-	}
-	vars, err := getVars(globals)
+	runs, err := getRuns(def.globals)
 	if err != nil {
 		return nil, parsingError(err, filename)
 	}
 
-	stdin, err := getStdin(globals)
+	format, err := getFormat(def.globals)
 	if err != nil {
 		return nil, parsingError(err, filename)
 	}
-	def := &Definition{
-		tests:  tests,
-		runs:   runs,
-		output: true,
-		args:   args,
-		vars:   vars,
-		stdin:  stdin,
+
+	errorFormat, err := getErrorFormat(def.globals)
+	if err != nil {
+		return nil, parsingError(err, filename)
 	}
+
+	args, err := getArgs(def.globals)
+	if err != nil {
+		return nil, parsingError(err, filename)
+	}
+
+	vars, err := getVars(def.globals)
+	if err != nil {
+		return nil, parsingError(err, filename)
+	}
+
+	stdin, err := getStdin(def.globals)
+	if err != nil {
+		return nil, parsingError(err, filename)
+	}
+	stdout, err := getStdout(def.globals)
+	if err != nil {
+		return nil, parsingError(err, filename)
+	}
+	stderr, err := getStderr(def.globals)
+	if err != nil {
+		return nil, parsingError(err, filename)
+	}
+
+	def.tests = tests
+	def.runs = runs
+	def.format = format
+	def.errorFormat = errorFormat
+	def.args = args
+	def.vars = vars
+	def.stdin = stdin
+	def.stdout = stdout
+	def.stderr = stderr
+
 	return def, nil
 }
 
-func getArgs(globals skylark.StringDict) ([]*Generator, error) {
+func getArgs(globals skylark.StringDict) ([]ReaderGenerator, error) {
 	val, found := globals["args"]
 	if !found {
 		return nil, fmt.Errorf("Missing declaration of args")
@@ -74,23 +100,15 @@ func getArgs(globals skylark.StringDict) ([]*Generator, error) {
 		)
 	}
 
-	gens := make([]*Generator, args.Len())
+	gens := make([]ReaderGenerator, args.Len())
 	for i := 0; i < args.Len(); i++ {
 		a := args.Index(i)
-		fn, ok := a.(skylark.Callable)
-		if !ok {
-			return nil, fmt.Errorf(
-				"Invalid type for generator at args[%d] (Expected Function or Builtin; got %q)",
-				i,
-				a.Type(),
-			)
-		}
-		gens[i] = NewGenerator(fn)
+		gens[i] = newReaderGenerator(a)
 	}
 	return gens, nil
 }
 
-func getVars(globals skylark.StringDict) (map[string]*Generator, error) {
+func getVars(globals skylark.StringDict) (map[string]ReaderGenerator, error) {
 	val, found := globals["vars"]
 	if !found {
 		return nil, fmt.Errorf("Missing declaration of vars")
@@ -103,22 +121,14 @@ func getVars(globals skylark.StringDict) (map[string]*Generator, error) {
 			val.Type(),
 		)
 	}
-	gens := make(map[string]*Generator)
-	for i, key := range vars.Keys() {
+	gens := make(map[string]ReaderGenerator)
+	for _, key := range vars.Keys() {
 		val, _, err := vars.Get(key)
 		if err != nil {
 			return nil,
 				errors.Wrapf(err, "Error getting key %q from dict vars", key)
 		}
 
-		fn, ok := val.(skylark.Callable)
-		if !ok {
-			return nil, fmt.Errorf(
-				"Invalid type for generator at args[%d] (Expected Function or Builtin; got %q)",
-				i,
-				val.Type(),
-			)
-		}
 		keyStr, ok := skylark.AsString(key)
 		if !ok {
 			return nil, fmt.Errorf(
@@ -127,7 +137,7 @@ func getVars(globals skylark.StringDict) (map[string]*Generator, error) {
 				key.Type(),
 			)
 		}
-		gens[keyStr] = NewGenerator(fn)
+		gens[keyStr] = newReaderGenerator(val)
 	}
 	return gens, nil
 }
@@ -180,25 +190,50 @@ func getRuns(globals skylark.StringDict) (int, error) {
 	return runs, nil
 }
 
-func getStdin(globals skylark.StringDict) (*Generator, error) {
+func getStdin(globals skylark.StringDict) (ReaderGenerator, error) {
 	val, found := globals["stdin"]
 	if !found {
-		return nil, fmt.Errorf("Missing declaration of runs")
+		return nil, fmt.Errorf("Missing declaration of stdin")
 	}
-	switch vt := val.(type) {
-	case skylark.Callable:
+	return newReaderGenerator(val), nil
+}
 
-		return NewGenerator(vt), nil
-	case *skylark.List:
-		return NewGeneratorFromConstant(vt), nil
-	case skylark.Tuple:
-		return NewGeneratorFromConstant(vt), nil
-	case skylark.String:
-		return NewGeneratorFromConstant(vt), nil
-	default:
-		return nil, fmt.Errorf(
-			"Invalid type for generator at stdin (Expected Function or Builtin; got %q)",
-			val.Type(),
-		)
+func getStderr(globals skylark.StringDict) (WriterGenerator, error) {
+	val, found := globals["stderr"]
+	if !found {
+		return nil, fmt.Errorf("Missing declaration of stderr")
 	}
+	return newWriterGenerator(val), nil
+}
+
+func getStdout(globals skylark.StringDict) (WriterGenerator, error) {
+	val, found := globals["stdout"]
+	if !found {
+		return nil, fmt.Errorf("Missing declaration of stderr")
+	}
+	return newWriterGenerator(val), nil
+}
+
+func getFormat(globals skylark.StringDict) (string, error) {
+	val, found := globals["format"]
+	if !found {
+		return "", fmt.Errorf("Missing declaration of format")
+	}
+	str, ok := skylark.AsString(val)
+	if !ok {
+		return "", fmt.Errorf("Invalid type for format string: %q", val.Type())
+	}
+	return str, nil
+}
+
+func getErrorFormat(globals skylark.StringDict) (string, error) {
+	val, found := globals["error_format"]
+	if !found {
+		return "", fmt.Errorf("Missing declaration of error_format")
+	}
+	str, ok := skylark.AsString(val)
+	if !ok {
+		return "", fmt.Errorf("Invalid type for format string: %q", val.Type())
+	}
+	return str, nil
 }

@@ -3,16 +3,18 @@ def random_int(x):
         return x*4
     return y
 
-def open_file(name):
+def open_file(name,mode):
     def y():
-        return [open(name), "hello"]
+        return [open(name, mode), "hello"]
     return y
 
 tests = ["cat", "cat"]
 runs = 5
-#stdin = open_file("fuzz.sky")
-stdin = ["hello", ("w" , [a for a in "orld".split_bytes()])]
-#args = [random_int(i) for i in range(5)]+[open_file("fuzz.sky")]
-#vars = {str(i):random_int(i) for i in range(5)}
+format = "%d \t%s\n"
+error_format = "%d %dX\t%s\n"
+
+stdin = ["hello", ("w" , [a for a in "orld".split_bytes()]), test.run+5000]
+stdout = [os.stdout]
+stderr = os.stderr
 args=[]
 vars=dict()

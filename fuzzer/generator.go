@@ -8,11 +8,17 @@ import (
 	"github.com/google/skylark"
 )
 
-type nopCloser struct {
+type nopReadCloser struct {
 	io.Reader
 }
 
-func (nopCloser) Close() error { return nil }
+func (nopReadCloser) Close() error { return nil }
+
+type nopWriteCloser struct {
+	io.Writer
+}
+
+func (nopWriteCloser) Close() error { return nil }
 
 type multiReadCloser struct {
 	rcs []io.ReadCloser
@@ -40,48 +46,74 @@ func (m *multiReadCloser) Close() error {
 	return firstErr
 }
 
-//Generator wraps a skylark.Callable and puts its output into an io.ReadCloser
-type Generator struct {
-	fn skylark.Callable
+type multiWriteCloser struct {
+	wcs []io.WriteCloser
+	io.Writer
 }
 
-//NewGenerator returns a new Generator from a skylark.Callable
-func NewGenerator(fn skylark.Callable) *Generator {
-	return &Generator{fn: fn}
-}
-
-func NewGeneratorFromConstant(v skylark.Value) *Generator {
-	return NewGenerator(skylark.NewBuiltin("temporary", func(
-		*skylark.Thread,
-		*skylark.Builtin,
-		skylark.Tuple,
-		[]skylark.Tuple,
-	) (skylark.Value, error) {
-		return v, nil
-	}))
-}
-
-//Generate returns an io.ReadCloser based on the skylark.Callable value it wraps
-func (g *Generator) Generate() (io.ReadCloser, error) {
-	thread := &skylark.Thread{}
-	val, err := g.fn.Call(thread, nil, nil)
-
-	if err != nil {
-		return nil, err
+func newMultiWriteCloser(writers ...io.WriteCloser) *multiWriteCloser {
+	wcs := make([]io.WriteCloser, len(writers))
+	ws := make([]io.Writer, len(writers))
+	copy(wcs, writers)
+	for i, w := range writers {
+		ws[i] = w
 	}
-	return makeReadCloser(val)
+	return &multiWriteCloser{wcs: wcs, Writer: io.MultiWriter(ws...)}
 }
 
-func makeReadCloser(val skylark.Value) (io.ReadCloser, error) {
+func (m *multiWriteCloser) Close() error {
+	var firstErr error
+	for _, wc := range m.wcs {
+		err := wc.Close()
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+//ReaderGenerator creates an io.ReadCloser
+type ReaderGenerator interface {
+	GenerateReader(State) (io.ReadCloser, error)
+}
+
+//WriterGenerator creates an io.WriteCloser
+type WriterGenerator interface {
+	GenerateWriter(State) (io.WriteCloser, error)
+}
+
+type readerGenerator struct {
+	v skylark.Value
+}
+
+func newReaderGenerator(v skylark.Value) *readerGenerator {
+	return &readerGenerator{v: v}
+}
+
+func (g *readerGenerator) GenerateReader(s State) (io.ReadCloser, error) {
+	return makeReadCloser(g.v, s)
+}
+
+func makeReadCloser(val skylark.Value, s State) (io.ReadCloser, error) {
 	switch vt := val.(type) {
 	case io.ReadCloser:
 		return vt, nil
+	case io.Reader:
+		return nopReadCloser{vt}, nil
+	case skylark.Callable:
+		t := &skylark.Thread{}
+		t.SetLocal("state", s)
+		newVal, err := vt.Call(t, nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		return makeReadCloser(newVal, s)
 	case skylark.String:
-		return nopCloser{strings.NewReader(string(vt))}, nil
+		return nopReadCloser{strings.NewReader(string(vt))}, nil
 	case skylark.Indexable:
 		rcs := make([]io.ReadCloser, vt.Len())
 		for i := 0; i < vt.Len(); i++ {
-			rc, err := makeReadCloser(vt.Index(i))
+			rc, err := makeReadCloser(vt.Index(i), s)
 			if err != nil {
 				return nil, err
 			}
@@ -89,24 +121,48 @@ func makeReadCloser(val skylark.Value) (io.ReadCloser, error) {
 		}
 		return newMultiReadCloser(rcs...), nil
 	default:
-		return nopCloser{strings.NewReader(vt.String())}, nil
+		return nopReadCloser{strings.NewReader(vt.String())}, nil
 	}
 }
 
-func makeWriter(val skylark.Value) (io.Writer, error) {
+type writerGenerator struct {
+	v skylark.Value
+}
+
+func newWriterGenerator(v skylark.Value) *writerGenerator {
+	return &writerGenerator{v: v}
+}
+
+func (g *writerGenerator) GenerateWriter(s State) (io.WriteCloser, error) {
+	return makeWriteCloser(g.v, s)
+}
+
+func makeWriteCloser(val skylark.Value, s State) (io.WriteCloser, error) {
 	switch vt := val.(type) {
-	case io.Writer:
+	case io.WriteCloser:
 		return vt, nil
+	case io.Writer:
+		return nopWriteCloser{vt}, nil
+	case skylark.Callable:
+		t := &skylark.Thread{}
+		t.SetLocal("state", s)
+		newVal, err := vt.Call(t, nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		return makeWriteCloser(newVal, s)
+	case skylark.String:
+		return nil, fmt.Errorf("Invalid Type (%v) for Writer", val.Type())
 	case skylark.Indexable:
-		ws := make([]io.Writer, vt.Len())
+		wcs := make([]io.WriteCloser, vt.Len())
 		for i := 0; i < vt.Len(); i++ {
-			w, err := makeWriter(vt.Index(i))
+			wc, err := makeWriteCloser(vt.Index(i), s)
 			if err != nil {
 				return nil, err
 			}
-			ws[i] = w
+			wcs[i] = wc
 		}
-		return io.MultiWriter(ws...), nil
+		return newMultiWriteCloser(wcs...), nil
 	default:
 		return nil, fmt.Errorf("Invalid Type (%v) for Writer", val.Type())
 	}
