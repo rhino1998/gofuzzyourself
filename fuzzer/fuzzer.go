@@ -2,6 +2,7 @@ package fuzzer
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -9,47 +10,15 @@ import (
 	"os/exec"
 	"runtime"
 	"sync"
+
+	"github.com/google/skylark/resolve"
 )
 
-var generators = make(map[string]func([]byte) (Generator, error))
-var readerGenerators = make(map[string]func([]byte) (ReaderGenerator, error))
-
 func init() {
-	var prefix Prefix
-	RegisterGenerator("prefix", prefix.unmarshal)
-
-	var constant Constant
-	RegisterGenerator("constant", constant.unmarshal)
-
-	var integerRandom IntegerRandom
-	RegisterGenerator("integer_random", integerRandom.unmarshal)
-
-	var integerNormalRandom IntegerNormalRandom
-	RegisterGenerator("integer_normal_random", integerNormalRandom.unmarshal)
-
-	var floatRandom FloatRandom
-	RegisterGenerator("float_random", floatRandom.unmarshal)
-
-	var floatNormalRandom FloatNormalRandom
-	RegisterGenerator("float_normal_random", floatNormalRandom.unmarshal)
-
-	var fileReader FileReader
-	RegisterReaderGenerator("file_reader", fileReader.unmarshal)
-
-	var commandReader CommandReader
-	RegisterReaderGenerator("command_reader", commandReader.unmarshal)
-}
-
-//RegisterGenerator registers a new Generator for the config parser
-//Use during initialization. Determinism is lost if used later
-func RegisterGenerator(t string, f func([]byte) (Generator, error)) {
-	generators[t] = f
-}
-
-//RegisterReaderGenerator registers a new ReaderGenerator for the config parser
-//Use during initialization. Determinism is lost if used later
-func RegisterReaderGenerator(t string, f func([]byte) (ReaderGenerator, error)) {
-	readerGenerators[t] = f
+	resolve.AllowLambda = true
+	resolve.AllowSet = true
+	resolve.AllowFloat = true
+	resolve.AllowNestedDef = true
 }
 
 //Definition describes a fuzzer test batch
@@ -58,9 +27,9 @@ type Definition struct {
 	runs   int
 	output bool
 
-	args  []Generator
-	vars  []Generator
-	stdin ReaderGenerator
+	args  []*Generator
+	vars  map[string]*Generator
+	stdin *Generator
 }
 
 type command struct {
@@ -98,12 +67,16 @@ func (d *Definition) Run() error {
 }
 
 func (d *Definition) oneRun() error {
-
-	args := genInput(d.args)
-	vars := genInput(d.vars)
+	args, err := genArgsInput(d.args)
+	if err != nil {
+		return err
+	}
+	vars, err := genVarsInput(d.vars)
+	if err != nil {
+		return err
+	}
 	tests := make(testCommands, len(d.tests))
 	for i, test := range d.tests {
-		var err error
 		tests[i], err = makeCommand(test, args, vars)
 		if err != nil {
 			return err
@@ -124,16 +97,17 @@ func (d *Definition) oneRun() error {
 
 	//Manage test execution
 	for _, test := range tests {
-		err := test.cmd.Start()
+		err = test.cmd.Start()
 		if err != nil {
 			return err
 		}
 	}
 
-	stdin, err := d.stdin.GenerateReader()
+	stdin, err := d.stdin.Generate()
 	if err != nil {
 		return err
 	}
+	defer stdin.Close()
 
 	go func() {
 		io.Copy(mergeStdin, stdin)
@@ -222,10 +196,34 @@ func makeCommand(executable string, args, vars []string) (*command, error) {
 	return &command{cmd, stdin, stdout, stderr}, err
 }
 
-func genInput(gs []Generator) []string {
-	out := make([]string, len(gs))
-	for i, g := range gs {
-		out[i] = g.Generate()
+func genArgsInput(args []*Generator) ([]string, error) {
+	out := make([]string, len(args))
+	for i, g := range args {
+		buf := new(bytes.Buffer)
+		rc, err := g.Generate()
+		if err != nil {
+			return nil, err
+		}
+		defer rc.Close()
+		io.Copy(buf, rc)
+		out[i] = buf.String()
 	}
-	return out
+	return out, nil
+}
+
+func genVarsInput(vars map[string]*Generator) ([]string, error) {
+	out := make([]string, len(vars))
+	i := 0
+	for k, g := range vars {
+		buf := new(bytes.Buffer)
+		rc, err := g.Generate()
+		if err != nil {
+			return nil, err
+		}
+		defer rc.Close()
+		io.Copy(buf, rc)
+		out[i] = fmt.Sprintf("%s=%s", k, buf.String())
+		i++
+	}
+	return out, nil
 }
