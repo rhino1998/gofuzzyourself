@@ -41,12 +41,18 @@ func ParseConfig(filename string, src interface{}) (*Definition, error) {
 	if err != nil {
 		return nil, parsingError(err, filename)
 	}
+
+	stdin, err := getStdin(globals)
+	if err != nil {
+		return nil, parsingError(err, filename)
+	}
 	def := &Definition{
 		tests:  tests,
 		runs:   runs,
 		output: true,
 		args:   args,
 		vars:   vars,
+		stdin:  stdin,
 	}
 	return def, nil
 }
@@ -169,4 +175,19 @@ func getRuns(globals skylark.StringDict) (int, error) {
 	}
 
 	return runs, nil
+}
+
+func getStdin(globals skylark.StringDict) (*Generator, error) {
+	val, found := globals["stdin"]
+	if !found {
+		return nil, fmt.Errorf("Missing declaration of runs")
+	}
+	fn, ok := val.(skylark.Callable)
+	if !ok {
+		return nil, fmt.Errorf(
+			"Invalid type for generator at stdin (Expected Function or Builtin; got %q)",
+			val.Type(),
+		)
+	}
+	return NewGenerator(fn), nil
 }

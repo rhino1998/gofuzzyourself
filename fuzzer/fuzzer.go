@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"strings"
 	"sync"
 
 	"github.com/google/skylark/resolve"
@@ -104,10 +103,11 @@ func (d *Definition) oneRun() error {
 		}
 	}
 
-	stdin, err := strings.NewReader("hello"), nil //d.stdin.Generate()
+	stdin, err := d.stdin.Generate()
 	if err != nil {
 		return err
 	}
+	defer stdin.Close()
 
 	go func() {
 		io.Copy(mergeStdin, stdin)
