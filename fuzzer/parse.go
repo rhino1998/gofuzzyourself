@@ -29,6 +29,9 @@ func ParseConfig(filename string, src interface{}) (*Definition, error) {
 	}
 
 	tests, err := getTests(globals)
+	if err != nil {
+		return nil, parsingError(err, filename)
+	}
 	runs, err := getRuns(globals)
 	if err != nil {
 		return nil, parsingError(err, filename)
