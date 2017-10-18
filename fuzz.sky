@@ -13,12 +13,12 @@ def port():
     return ("--port="+str(test.run+5000))
 
 tests = ["echo", "echo"]
-runs = 50
-format = "%{0}d| \t%s\n".format(len(str(runs-1)))
-error_format = "%2{0} %dX|\t%s\n".format(len(str(runs-1)))
+runs = 5000
+format = "%0{0}d| \t%s\n".format(len(str(runs-1)))
+error_format = "%0{0} %dX|\t%s\n".format(len(str(runs-1)))
 
 stdin = None#["hello", ("w" , [a for a in "orld".split_bytes()]), test.run+5000]
 stdout = [os.stdout]
 stderr = os.stderr
-args=[port]
+args=["-e", port]
 vars=dict()

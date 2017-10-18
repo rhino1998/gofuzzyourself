@@ -23,10 +23,7 @@ func generateRunConfig(def *Definition, s State) (*runConfig, error) {
 	config := &runConfig{}
 	thread := &skylark.Thread{}
 	globals := shallowCopyGlobals(def.globals)
-	testVal := NewNamespace("test")
-	testVal.SetAttr("run", skylark.MakeInt(s.Run))
-
-	globals["test"] = testVal
+	setupGlobals(globals, s)
 
 	err := skylark.Exec(skylark.ExecOptions{
 		Thread:   thread,
@@ -34,6 +31,9 @@ func generateRunConfig(def *Definition, s State) (*runConfig, error) {
 		Source:   def.src,
 		Globals:  globals,
 	})
+	if err != nil {
+		return nil, err
+	}
 
 	config.format, err = getFormat(globals)
 	if err != nil {
@@ -83,17 +83,17 @@ func (c *runConfig) generateState(s State) (args, vars []string,
 		return nil, nil, nil, nil, nil, err
 	}
 
-	stdin, err = c.stdin.GenerateReader(s)
+	stdin, err = c.stdin.GenerateReader()
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
 
-	mergeStdout, err = c.stdout.GenerateWriter(s)
+	mergeStdout, err = c.stdout.GenerateWriter()
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
 
-	mergeStderr, err = c.stderr.GenerateWriter(s)
+	mergeStderr, err = c.stderr.GenerateWriter()
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
@@ -104,7 +104,7 @@ func genArgsInput(args []ReaderGenerator, s State) ([]string, error) {
 	out := make([]string, len(args))
 	for i, g := range args {
 		buf := new(bytes.Buffer)
-		rc, err := g.GenerateReader(s)
+		rc, err := g.GenerateReader()
 		if err != nil {
 			return nil, err
 		}
@@ -120,7 +120,7 @@ func genVarsInput(vars map[string]ReaderGenerator, s State) ([]string, error) {
 	i := 0
 	for k, g := range vars {
 		buf := new(bytes.Buffer)
-		rc, err := g.GenerateReader(s)
+		rc, err := g.GenerateReader()
 		if err != nil {
 			return nil, err
 		}

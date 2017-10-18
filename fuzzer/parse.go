@@ -22,7 +22,7 @@ func ParseConfig(filename string, src interface{}, opts ...Option) (*Definition,
 	def := &Definition{
 		globals: shallowCopyGlobals(skylark.Universe),
 	}
-	setupGlobals(def.globals)
+	setupGlobals(def.globals, State{})
 
 	var reader io.Reader
 	buf := new(bytes.Buffer)

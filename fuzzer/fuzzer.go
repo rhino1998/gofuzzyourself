@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"os"
-	"os/exec"
 	"runtime"
 	"sync"
 
@@ -37,13 +35,6 @@ type Definition struct {
 
 	tests []string
 	runs  int
-}
-
-type command struct {
-	cmd        *exec.Cmd
-	stdinPipe  io.WriteCloser
-	stdoutPipe io.Reader
-	stderrPipe io.Reader
 }
 
 //Run executes one run of the fuzzer and managers comparison
@@ -92,12 +83,9 @@ func (d *Definition) oneRun(s State, closeChan chan io.Closer) error {
 	closeChan <- mergeStdout
 	closeChan <- mergeStderr
 
-	tests := make(testCommands, len(d.tests))
-	for i, test := range d.tests {
-		tests[i], err = makeCommand(test, args, vars)
-		if err != nil {
-			return err
-		}
+	tests, err := makeCommandGroup(d.tests, args, vars)
+	if err != nil {
+		return err
 	}
 
 	diffStdoutErrChan := compareReaders(
@@ -111,7 +99,7 @@ func (d *Definition) oneRun(s State, closeChan chan io.Closer) error {
 
 	//Manage test execution
 	for _, test := range tests {
-		err = test.cmd.Start()
+		err = test.Start()
 		if err != nil {
 			return err
 		}
@@ -130,7 +118,7 @@ func (d *Definition) oneRun(s State, closeChan chan io.Closer) error {
 	}()
 
 	for _, test := range tests {
-		defer test.cmd.Wait()
+		defer test.Wait()
 	}
 
 	select {
@@ -218,30 +206,4 @@ func compareReaders(run int, format, errorFormat string,
 		close(errChan)
 	}()
 	return errChan
-}
-
-func makeCommand(executable string, args, vars []string) (*command, error) {
-	cmd := exec.Command(
-		executable,
-		args...,
-	)
-	cmd.Env = os.Environ()
-	cmd.Env = append(cmd.Env, vars...)
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, err
-	}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, err
-	}
-
-	return &command{cmd, stdin, stdout, stderr}, err
 }
