@@ -1,7 +1,10 @@
 package fuzzer
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"strings"
 
 	"github.com/google/skylark"
 	"github.com/pkg/errors"
@@ -14,17 +17,34 @@ func parsingError(err error, filename string) error {
 /*ParseConfig parses a skylark file looking for specific global variables
 * describing what binaries to fuzz and what inputs to provide
  */
-func ParseConfig(filename string, src interface{}, opt ...Option) (*Definition, error) {
+func ParseConfig(filename string, src interface{}, opts ...Option) (*Definition, error) {
 	thread := &skylark.Thread{}
 	def := &Definition{
 		globals: shallowCopyGlobals(skylark.Universe),
 	}
 	setupGlobals(def.globals)
 
+	var reader io.Reader
+	buf := new(bytes.Buffer)
+	switch st := src.(type) {
+	case io.Reader:
+		reader = st
+	case string:
+		reader = strings.NewReader(st)
+	}
+	r := io.TeeReader(reader, buf)
+
+	for _, opt := range opts {
+		err := opt(def)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	err := skylark.Exec(skylark.ExecOptions{
 		Thread:   thread,
 		Filename: filename,
-		Source:   src,
+		Source:   r,
 		Globals:  def.globals,
 	})
 	if err != nil {
@@ -40,49 +60,10 @@ func ParseConfig(filename string, src interface{}, opt ...Option) (*Definition, 
 		return nil, parsingError(err, filename)
 	}
 
-	format, err := getFormat(def.globals)
-	if err != nil {
-		return nil, parsingError(err, filename)
-	}
-
-	errorFormat, err := getErrorFormat(def.globals)
-	if err != nil {
-		return nil, parsingError(err, filename)
-	}
-
-	args, err := getArgs(def.globals)
-	if err != nil {
-		return nil, parsingError(err, filename)
-	}
-
-	vars, err := getVars(def.globals)
-	if err != nil {
-		return nil, parsingError(err, filename)
-	}
-
-	stdin, err := getStdin(def.globals)
-	if err != nil {
-		return nil, parsingError(err, filename)
-	}
-	stdout, err := getStdout(def.globals)
-	if err != nil {
-		return nil, parsingError(err, filename)
-	}
-	stderr, err := getStderr(def.globals)
-	if err != nil {
-		return nil, parsingError(err, filename)
-	}
-
 	def.tests = tests
 	def.runs = runs
-	def.format = format
-	def.errorFormat = errorFormat
-	def.args = args
-	def.vars = vars
-	def.stdin = stdin
-	def.stdout = stdout
-	def.stderr = stderr
-
+	def.src = buf.String()
+	def.filename = filename
 	return def, nil
 }
 

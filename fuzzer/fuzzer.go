@@ -2,7 +2,6 @@ package fuzzer
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -32,18 +31,12 @@ func shallowCopyGlobals(globals skylark.StringDict) skylark.StringDict {
 
 //Definition describes a fuzzer test batch
 type Definition struct {
-	globals skylark.StringDict
+	globals  skylark.StringDict
+	filename string
+	src      string
 
-	tests       []string
-	runs        int
-	format      string
-	errorFormat string
-
-	args   []ReaderGenerator
-	vars   map[string]ReaderGenerator
-	stdin  ReaderGenerator
-	stdout WriterGenerator
-	stderr WriterGenerator
+	tests []string
+	runs  int
 }
 
 type command struct {
@@ -87,14 +80,18 @@ func (d *Definition) Run() error {
 }
 
 func (d *Definition) oneRun(s State, closeChan chan io.Closer) error {
-	args, err := genArgsInput(d.args, s)
+	config, err := generateRunConfig(d, s)
 	if err != nil {
 		return err
 	}
-	vars, err := genVarsInput(d.vars, s)
+
+	args, vars, stdin, mergeStdout, mergeStderr, err := config.generateState(s)
 	if err != nil {
 		return err
 	}
+	closeChan <- mergeStdout
+	closeChan <- mergeStderr
+
 	tests := make(testCommands, len(d.tests))
 	for i, test := range d.tests {
 		tests[i], err = makeCommand(test, args, vars)
@@ -103,24 +100,12 @@ func (d *Definition) oneRun(s State, closeChan chan io.Closer) error {
 		}
 	}
 
-	mergeStdout, err := d.stdout.GenerateWriter(s)
-	if err != nil {
-		return err
-	}
-	closeChan <- mergeStdout
-
-	mergeStderr, err := d.stderr.GenerateWriter(s)
-	if err != nil {
-		return err
-	}
-	closeChan <- mergeStderr
-
 	diffStdoutErrChan := compareReaders(
-		s.Run, d.format, d.errorFormat,
+		s.Run, config.format, config.errorFormat,
 		mergeStdout, tests.stdouts()...,
 	)
 	diffStderrErrChan := compareReaders(
-		s.Run, d.format, d.errorFormat,
+		s.Run, config.format, config.errorFormat,
 		mergeStderr, tests.stderrs()...,
 	)
 
@@ -135,23 +120,14 @@ func (d *Definition) oneRun(s State, closeChan chan io.Closer) error {
 	stdinErrChan := make(chan error)
 	defer close(stdinErrChan)
 
-	if d.stdin != nil {
-		mergeStdin := io.MultiWriter(tests.stdins()...)
-		stdin, err := d.stdin.GenerateReader(s)
+	mergeStdin := io.MultiWriter(tests.stdins()...)
+	go func() {
+		_, err := io.Copy(mergeStdin, stdin)
 		if err != nil {
-			return err
+			stdinErrChan <- err
 		}
-		defer stdin.Close()
-		go func() {
-			_, err := io.Copy(mergeStdin, stdin)
-			if err != nil {
-				stdinErrChan <- err
-			}
-			tests.closeStdins()
-		}()
-	} else {
 		tests.closeStdins()
-	}
+	}()
 
 	for _, test := range tests {
 		defer test.cmd.Wait()
@@ -268,36 +244,4 @@ func makeCommand(executable string, args, vars []string) (*command, error) {
 	}
 
 	return &command{cmd, stdin, stdout, stderr}, err
-}
-
-func genArgsInput(args []ReaderGenerator, s State) ([]string, error) {
-	out := make([]string, len(args))
-	for i, g := range args {
-		buf := new(bytes.Buffer)
-		rc, err := g.GenerateReader(s)
-		if err != nil {
-			return nil, err
-		}
-		defer rc.Close()
-		io.Copy(buf, rc)
-		out[i] = buf.String()
-	}
-	return out, nil
-}
-
-func genVarsInput(vars map[string]ReaderGenerator, s State) ([]string, error) {
-	out := make([]string, len(vars))
-	i := 0
-	for k, g := range vars {
-		buf := new(bytes.Buffer)
-		rc, err := g.GenerateReader(s)
-		if err != nil {
-			return nil, err
-		}
-		defer rc.Close()
-		io.Copy(buf, rc)
-		out[i] = fmt.Sprintf("%s=%s", k, buf.String())
-		i++
-	}
-	return out, nil
 }

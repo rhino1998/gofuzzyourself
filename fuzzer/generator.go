@@ -1,18 +1,14 @@
 package fuzzer
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"strings"
 
 	"github.com/google/skylark"
 )
-
-type nopReadCloser struct {
-	io.Reader
-}
-
-func (nopReadCloser) Close() error { return nil }
 
 type nopWriteCloser struct {
 	io.Writer
@@ -96,10 +92,12 @@ func (g *readerGenerator) GenerateReader(s State) (io.ReadCloser, error) {
 
 func makeReadCloser(val skylark.Value, s State) (io.ReadCloser, error) {
 	switch vt := val.(type) {
+	case skylark.NoneType:
+		return ioutil.NopCloser(bytes.NewReader(nil)), nil
 	case io.ReadCloser:
 		return vt, nil
 	case io.Reader:
-		return nopReadCloser{vt}, nil
+		return ioutil.NopCloser(vt), nil
 	case skylark.Callable:
 		t := &skylark.Thread{}
 		t.SetLocal("state", s)
@@ -109,7 +107,7 @@ func makeReadCloser(val skylark.Value, s State) (io.ReadCloser, error) {
 		}
 		return makeReadCloser(newVal, s)
 	case skylark.String:
-		return nopReadCloser{strings.NewReader(string(vt))}, nil
+		return ioutil.NopCloser(strings.NewReader(string(vt))), nil
 	case skylark.Indexable:
 		rcs := make([]io.ReadCloser, vt.Len())
 		for i := 0; i < vt.Len(); i++ {
@@ -121,7 +119,7 @@ func makeReadCloser(val skylark.Value, s State) (io.ReadCloser, error) {
 		}
 		return newMultiReadCloser(rcs...), nil
 	default:
-		return nopReadCloser{strings.NewReader(vt.String())}, nil
+		return ioutil.NopCloser(strings.NewReader(vt.String())), nil
 	}
 }
 
