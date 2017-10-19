@@ -2,7 +2,7 @@ package fuzzer
 
 import "testing"
 
-func TestStdins(t *testing.T) {
+func TestStdinsEmpty(t *testing.T) {
 	cmds, err := makeCommandGroup([]string{}, []string{}, []string{})
 
 	if err != nil {
@@ -12,5 +12,4 @@ func TestStdins(t *testing.T) {
 	for _, stdin := range cmds.stdins() {
 		t.Fatalf("Should not have stdins on empty command: %q", stdin)
 	}
-
 }

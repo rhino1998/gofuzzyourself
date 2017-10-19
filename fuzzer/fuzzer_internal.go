@@ -80,3 +80,24 @@ func (t commandGroup) stderrs() []io.Reader {
 	}
 	return stderrs
 }
+
+func (t commandGroup) start() error {
+	var firstErr error
+	for _, cmd := range t {
+		err := cmd.Start()
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+func (t commandGroup) wait() error {
+	var firstErr error
+	for _, cmd := range t {
+		err := cmd.Wait()
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}

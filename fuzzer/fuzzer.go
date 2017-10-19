@@ -97,12 +97,10 @@ func (d *Definition) oneRun(s State, closeChan chan io.Closer) error {
 		mergeStderr, tests.stderrs()...,
 	)
 
-	//Manage test execution
-	for _, test := range tests {
-		err = test.Start()
-		if err != nil {
-			return err
-		}
+	err = tests.start()
+	defer tests.wait()
+	if err != nil {
+		return err
 	}
 
 	stdinErrChan := make(chan error)
@@ -117,51 +115,29 @@ func (d *Definition) oneRun(s State, closeChan chan io.Closer) error {
 		tests.closeStdins()
 	}()
 
-	for _, test := range tests {
-		defer test.Wait()
-	}
-
+	var errStdout, errStderr error
 	select {
-	case err := <-diffStderrErrChan:
-		err2 := <-diffStdoutErrChan
-		if err2 != nil {
-			return errors.Wrapf(
-				err2,
-				"Error on tests %v given args %v and environment %v",
-				d.tests,
-				args,
-				vars,
-			)
-		}
-		return errors.Wrapf(
-			err,
-			"Error on tests %v given args %v and environment %v",
-			d.tests,
-			args,
-			vars,
-		)
-	case err := <-diffStdoutErrChan:
-		err2 := <-diffStderrErrChan
-		if err2 != nil {
-			return errors.Wrapf(
-				err2,
-				"Error on tests %v given input %v and environment %v",
-				d.tests,
-				args,
-				vars,
-			)
-		}
-		return errors.Wrapf(
-			err,
-			"Error on tests %v given input %v and environment %v",
-			d.tests,
-			args,
-			vars,
-		)
+	case errStderr = <-diffStderrErrChan:
+		errStdout = <-diffStdoutErrChan
+	case errStderr = <-diffStdoutErrChan:
+		errStdout = <-diffStderrErrChan
 	case err := <-stdinErrChan:
 		return errors.Wrapf(err, "Error reading from stdin generator")
-
 	}
+	if errStdout != nil {
+		return errors.Wrapf(
+			errStdout,
+			"Error on tests %v given input %v and environment %v",
+			vars,
+			args,
+		)
+	}
+	return errors.Wrapf(
+		errStderr,
+		"Error on tests %v given input %v and environment %v",
+		vars,
+		args,
+	)
 }
 
 func compareReaders(run int, format, errorFormat string,
